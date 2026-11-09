@@ -1,0 +1,8 @@
+# datasets (download separately, see README) and generated output
+data/
+results/
+# Python
+.venv/
+__pycache__/
+*.pyc
+.gradio/
