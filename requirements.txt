@@ -3,4 +3,6 @@ opencv-python
 scikit-image
 scipy
 matplotlib
-gradio
+fastapi
+uvicorn
+python-multipart

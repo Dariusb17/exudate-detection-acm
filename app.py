@@ -1,223 +1,228 @@
-"""Local web interface for the exudate detector.
+"""Exora - web app for the exudate detector.
 
     python app.py            -> opens http://127.0.0.1:7860 in the browser
 
-Upload a fundus image (or click an example) and the page shows the detected
-exudates, the decision for the whole image and every stage of Algorithm 1.
-If the image is from DIARETDB1, the expert ground truth is compared as well.
+The page (web/) talks to the endpoints below. The detection itself is
+exudates/detection.py (Algorithm 1 of the paper); this file only passes the
+photo in and turns the results into pictures for the page.
+
+  GET  /api/samples              example photos
+  GET  /api/samples/{id}         the photo itself
+  GET  /api/samples/{id}/thumb   small preview
+  POST /api/analyze              run the detector on an uploaded photo
 """
+import base64
+import threading
 import time
+import webbrowser
 from dataclasses import replace
 from pathlib import Path
 
 import cv2
-import gradio as gr
 import numpy as np
+import uvicorn
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from matplotlib import colormaps
 
-from evaluate_ddb1 import ROOT as DDB1_ROOT, load_gt
+from evaluate_ddb1 import ROOT as DDB1_ROOT, load_gt as load_ddb1_gt
 from exudates import Params, detect_exudates, overlay
-from exudates.evaluation import load_rgb
+from exudates.color_morphology import TAU_ACM
+from exudates.evaluation import load_gt_mask
 from exudates.visualize import compare_image, step_panels
 
-DDB1 = Path(DDB1_ROOT)
-EXAMPLE_NAMES = ["image016", "image014", "image019", "image060"]   # 3 with exudates, 1 healthy
-EXAMPLES = [str(DDB1 / "ddb1_fundusimages" / f"{n}.png") for n in EXAMPLE_NAMES]
-EXAMPLES = [[e] for e in EXAMPLES if Path(e).exists()]
-GALLERY_WIDTH = 1000
+HERE = Path(__file__).parent
+WEB = HERE / "web"
+DDB1 = HERE / DDB1_ROOT
+IDRID_GT = HERE / "data/IDRiD/A. Segmentation/2. All Segmentation Groundtruths"
+PORT = 7860
+DISPLAY_WIDTH = 1000          # pictures sent to the page are at most this wide
 
-HOW_IT_WORKS = """
-**1 · Color normalization.** The image is converted to CIE L\\*a\\*b\\* and its colors are
-matched to a fixed reference image (DIARETDB1 image006), so one exudate color fits every photo.
+# Example photos: IDRiD ones ship with the repo (CC BY 4.0), DIARETDB1 ones are
+# used when the dataset is in data/.
+SAMPLES = {
+    "idrid-03": (HERE / "examples/IDRiD_03.jpg", "IDRiD 03", "Exudates"),
+    "idrid-10": (HERE / "examples/IDRiD_10.jpg", "IDRiD 10", "Exudates"),
+    "idrid-25": (HERE / "examples/IDRiD_25.jpg", "IDRiD 25", "Exudates"),
+    "idrid-118": (HERE / "examples/IDRiD_118.jpg", "IDRiD 118", "Healthy"),
+    "ddb1-016": (DDB1 / "ddb1_fundusimages/image016.png", "DIARETDB1 016", "Exudates"),
+    "ddb1-019": (DDB1 / "ddb1_fundusimages/image019.png", "DIARETDB1 019", "Exudates"),
+    "ddb1-060": (DDB1 / "ddb1_fundusimages/image060.png", "DIARETDB1 060", "Healthy"),
+}
+SAMPLES = {k: v for k, v in SAMPLES.items() if v[0].exists()}
 
-**2 · Candidates by color (Adaptive Color Morphology).** Every pixel gets its CIEDE2000
-distance to the exudate color C_ref = (85, 10, 40). The adaptive dilation keeps the most
-exudate-like color in each 5×5 window, the erosion the least exudate-like one; their
-difference (the gradient G) is high around yellow lesions. G > 0.15 → candidate regions.
-
-**3 · Remove look-alikes.** Optic disc (highest-entropy region), blood vessels (closing of
-the green channel) and the border of the field of view are removed from the candidates.
-
-**4 · Confirm & refine.** Morphological reconstruction on the green channel keeps spots that
-are clearly brighter than their surroundings; regions without sharp (Sobel) edges are dropped;
-a final 5×5 dilation gives the exudate mask.
-"""
-
-# Short explanation of each stage, in the order of step_panels(); read aloud when presenting.
-STAGE_TEXT = [
-    "The original color fundus photograph. It is cropped to the round field of view and resized "
-    "to a standard width of 1500 px, so every image has the same scale.",
-
-    "The image is converted to the **CIE L\\*a\\*b\\*** color space (one lightness axis and two color axes, "
-    "close to how humans see color). The mean and spread of each channel are then matched to a fixed "
-    "reference image (DIARETDB1 image006). After this step all photos have similar colors, so one fixed "
-    "exudate color works for every image.",
-
-    "For every pixel we compute the **CIEDE2000** distance to the reference exudate color "
-    "**C_ref = (85, 10, 40)**, a bright yellow. CIEDE2000 measures how different two colors look to a human. "
-    "**Yellow** = close to the exudate color, **dark** = far from it.",
-
-    "**Adaptive Color Morphology.** The adaptive dilation replaces each pixel with the *most* exudate-like "
-    "color in its 5×5 neighborhood, the adaptive erosion with the *least* exudate-like one (only colors "
-    "within τ_ACM of C_ref take part). The **gradient G** is the CIEDE2000 distance between the two results. "
-    "It lights up around yellow lesions.",
-
-    "The gradient is scaled to [0, 1] and thresholded at **0.15** (the paper's value). "
-    "White pixels are candidates: they outline the exudate-colored regions.",
-
-    "Holes inside the outlines are filled, so each candidate becomes a solid region.",
-
-    "Structures that look like exudates and must be excluded: the **optic disc** (magenta), bright and "
-    "yellow, found as the region with the highest local entropy (texture); the **blood vessels** (green), "
-    "found with a morphological closing of the green channel; and the **border** of the field of view (cyan).",
-
-    "Candidates that fall on the optic disc, the vessels or the border are removed. The remaining regions "
-    "are slightly enlarged so they cover the whole lesion.",
-
-    "**Morphological reconstruction** on the green channel: the candidate regions are erased and the "
-    "surrounding background is grown back into them. Subtracting this from the original image shows how much "
-    "*brighter* each spot is than its surroundings.",
-
-    "Only pixels clearly brighter than their reconstructed background (more than 10 gray levels) are kept. "
-    "This removes candidates that have the right color but are not real bright lesions.",
-
-    "Exudates have **sharp borders**. Edges are detected with the **Sobel** operator, and regions with few "
-    "edge pixels (smooth reflections, blurry areas) are removed.",
-
-    "A final **5×5 dilation** gives the exudate mask, shown in **blue**. If at least {min_area:,} pixels are "
-    "marked, the whole image is classified as **with exudates**.",
-
-    "Comparison with the experts' annotation (DIARETDB1): **green** = correctly detected, "
-    "**yellow** = detected but not marked by the experts (false alarm), **red** = marked by the experts but missed.",
+# One entry per picture returned by step_panels(): (stage of Algorithm 1, title, explanation)
+STAGES = [
+    ("Pre-processing", "Input photo",
+     "The original fundus photograph, cropped to the round field of view and resized to a standard "
+     "width of 1500 px so every image has the same scale."),
+    ("Pre-processing", "Color normalization",
+     "Converted to <b>CIE L*a*b*</b> (one lightness axis, two color axes, close to how people see color). "
+     "The mean and spread of each channel are matched to a fixed reference photo (DIARETDB1 image006), "
+     "so one exudate color works for every camera."),
+    ("Candidate extraction", "Distance to the exudate color",
+     "Every pixel's <b>CIEDE2000</b> distance to the reference exudate color C<sub>ref</sub> = (85, 10, 40). "
+     "CIEDE2000 measures how different two colors look to a person. Yellow = close, dark = far."),
+    ("Candidate extraction", "Adaptive color gradient",
+     "<b>Adaptive color morphology.</b> Dilation takes the most exudate-like color in each 5×5 window, "
+     "erosion the least exudate-like one (only colors within τ<sub>ACM</sub> of C<sub>ref</sub> take part). "
+     "Their CIEDE2000 difference, the gradient G, lights up around yellow lesions."),
+    ("Candidate extraction", "Gradient threshold",
+     "G is scaled to 0–1 and thresholded at <b>0.15</b>, the paper's value. "
+     "White pixels outline the exudate-colored regions."),
+    ("Candidate extraction", "Filled candidates",
+     "Holes inside the outlines are filled, so each candidate becomes a solid region."),
+    ("Look-alike removal", "Optic disc, vessels, border",
+     "Structures that can be mistaken for exudates: the <b>optic disc</b> (magenta, the region with the "
+     "highest local entropy), <b>blood vessels</b> (green, from a morphological closing of the green "
+     "channel) and the <b>border</b> of the field of view (cyan)."),
+    ("Look-alike removal", "Clean candidates",
+     "Candidates on the optic disc, vessels or border are removed. The rest are slightly enlarged so "
+     "they cover the whole lesion."),
+    ("Segmentation & refinement", "Reconstruction difference",
+     "<b>Morphological reconstruction</b> on the green channel: candidates are erased and the background "
+     "is grown back into them. The difference shows how much brighter each spot is than its surroundings."),
+    ("Segmentation & refinement", "Brightness threshold",
+     "Only pixels more than 10 gray levels brighter than their reconstructed background are kept, "
+     "which drops spots that have the right color but are not bright lesions."),
+    ("Segmentation & refinement", "Edge filter",
+     "Exudates have <b>sharp borders</b>. Edges come from the <b>Sobel</b> operator; regions with few "
+     "edge pixels (smooth reflections, blur) are removed."),
+    ("Segmentation & refinement", "Final mask",
+     "A final <b>5×5 dilation</b> gives the exudate mask, painted blue. With at least {min_area:,} marked "
+     "pixels the photo is classified as <b>with exudates</b>."),
+    ("Expert check", "Compared with the experts",
+     "Detection against the experts' annotation: <b>green</b> = found, <b>yellow</b> = marked by Exora "
+     "only, <b>red</b> = marked by the experts only."),
 ]
 
-CSS = """
-.stage-text {font-size: 17px; line-height: 1.55;}
-.stage-text h3 {margin: 0 0 6px 0;}
-.gradio-container {max-width: 1280px !important; margin: auto;}
-#title h1 {margin-bottom: 0;}
-#title p {margin-top: 4px; opacity: .75;}
-.verdict {border-radius: 12px; padding: 16px 20px; font-size: 15px; line-height: 1.5;}
-.verdict b.big {font-size: 22px; display: block; margin-bottom: 4px;}
-.verdict.pos {background: #fdecea; border-left: 6px solid #d93025; color: #5f1410;}
-.verdict.neg {background: #e6f4ea; border-left: 6px solid #1e8e3e; color: #0d3d1b;}
-.verdict.idle {background: rgba(127,127,127,.08); border-left: 6px solid #9aa0a6;}
-"""
+app = FastAPI(title="Exora")
+app.mount("/static", StaticFiles(directory=WEB), name="static")
+_thumbs = {}
 
 
-def _to_rgb(img, cmap):
-    """Panel image -> uint8 RGB for display."""
+def data_url(rgb, width=DISPLAY_WIDTH, quality=88):
+    """RGB picture -> JPEG data URL, shrunk to `width`."""
+    h, w = rgb.shape[:2]
+    if w > width:
+        rgb = cv2.resize(rgb, (width, round(h * width / w)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+
+
+def to_picture(img, cmap):
+    """Step result -> RGB picture (masks in black/white, maps through a colormap)."""
     if cmap is None:
-        out = img
-    elif img.dtype == bool:
-        out = np.dstack([img.astype(np.uint8) * 255] * 3)
-    else:
-        x = img.astype(np.float32)
-        x = np.clip(x / max(1e-6, float(np.percentile(x, 99.8))), 0, 1)
-        out = (colormaps[cmap](x)[..., :3] * 255).astype(np.uint8)
-    h, w = out.shape[:2]
-    if w > GALLERY_WIDTH:
-        out = cv2.resize(out, (GALLERY_WIDTH, int(h * GALLERY_WIDTH / w)), interpolation=cv2.INTER_AREA)
-    return out
+        return img
+    if img.dtype == bool:
+        return np.dstack([img.astype(np.uint8) * 255] * 3)
+    x = img.astype(np.float32)
+    x = np.clip(x / max(1e-6, float(np.percentile(x, 99.8))), 0, 1)
+    return (colormaps[cmap](x)[..., :3] * 255).astype(np.uint8)
 
 
-def _ground_truth(path, pre):
-    """DIARETDB1 expert map for this image, if the file name matches one."""
-    if not path:
-        return None
-    gt_file = DDB1 / "ddb1_groundtruth" / "hardexudates" / Path(path).name
-    return load_gt(gt_file, pre) if gt_file.exists() else None
+def ground_truth(filename, pre):
+    """Expert exudate mask if the photo is a DIARETDB1 or IDRiD image we have annotations for."""
+    name = Path(filename or "").name
+    ddb1 = DDB1 / "ddb1_groundtruth/hardexudates" / name
+    if name and ddb1.exists():
+        return load_ddb1_gt(ddb1, pre), "DIARETDB1 experts"
+    for f in IDRID_GT.glob(f"*/3. Hard Exudates/{Path(name).stem}_EX.tif"):
+        return load_gt_mask(f, pre) & pre.roi, "IDRiD experts"
+    return None, None
 
 
-def run(path, tau_acm, min_area):
-    if not path:
-        raise gr.Error("Upload a fundus image first (or click one of the examples).")
+@app.get("/")
+def index():
+    return FileResponse(WEB / "index.html")
+
+
+@app.get("/api/config")
+def config():
+    """Default settings, straight from the detector's parameters."""
+    return {"tau_acm": Params.tau_acm, "paper_tau_acm": TAU_ACM, "min_area": Params.image_min_area}
+
+
+@app.get("/api/samples")
+def samples():
+    return [{"id": k, "label": label, "kind": kind, "file": path.name,
+             "url": f"/api/samples/{k}", "thumb": f"/api/samples/{k}/thumb"}
+            for k, (path, label, kind) in SAMPLES.items()]
+
+
+@app.get("/api/samples/{sid}")
+def sample(sid: str):
+    if sid not in SAMPLES:
+        raise HTTPException(404, "Unknown sample")
+    return FileResponse(SAMPLES[sid][0], filename=SAMPLES[sid][0].name)
+
+
+@app.get("/api/samples/{sid}/thumb")
+def sample_thumb(sid: str):
+    if sid not in SAMPLES:
+        raise HTTPException(404, "Unknown sample")
+    if sid not in _thumbs:
+        bgr = cv2.imdecode(np.fromfile(str(SAMPLES[sid][0]), np.uint8), cv2.IMREAD_COLOR)
+        h, w = bgr.shape[:2]
+        small = cv2.resize(bgr, (240, round(h * 240 / w)), interpolation=cv2.INTER_AREA)
+        _thumbs[sid] = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+    return Response(_thumbs[sid], media_type="image/jpeg")
+
+
+@app.post("/api/analyze")
+def analyze(image: UploadFile = File(...), tau_acm: float = Form(Params.tau_acm),
+            min_area: int = Form(Params.image_min_area)):
+    bgr = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise HTTPException(400, "This file can't be read as an image. Use a JPG, PNG or TIF photo.")
+    params = replace(Params(), tau_acm=float(np.clip(tau_acm, 10, 45)), image_min_area=max(0, int(min_area)))
+
     t0 = time.time()
-    params = replace(Params(), tau_acm=float(tau_acm), image_min_area=int(min_area))
-    res = detect_exudates(load_rgb(path), params)
-    gt = _ground_truth(path, res.pre)
-    secs = time.time() - t0
+    try:
+        res = detect_exudates(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), params)   # the paper's algorithm
+    except Exception:
+        raise HTTPException(422, "No retina was found in this photo. Use a color fundus photograph "
+                                 "with the round field of view visible.")
+    seconds = time.time() - t0
 
-    px = int(res.mask.sum())
-    regions = cv2.connectedComponents(res.mask.astype(np.uint8))[0] - 1
-    positive = px >= params.image_min_area
-    lines = [f"{px:,} exudate pixels in {regions} region(s) · rule: ≥ {params.image_min_area:,} px · {secs:.1f} s"]
+    pre, mask = res.pre, res.mask
+    gt, gt_source = ground_truth(image.filename, pre)
+    marked = int(mask.sum())
+    positive = marked >= params.image_min_area
+
+    stages = []
+    for i, (name, img, cmap) in enumerate(step_panels(res, gt)):
+        group, title, text = STAGES[i]
+        stages.append({"group": group, "title": title, "text": text.format(min_area=params.image_min_area),
+                       "image": data_url(to_picture(img, cmap))})
+
+    expert = None
     if gt is not None:
-        has_gt = bool(gt.any())
-        ok = has_gt == positive
-        lines.append(f"Expert ground truth (DIARETDB1): <b>{'exudates' if has_gt else 'no exudates'}</b> "
-                     f"→ prediction {'✔ correct' if ok else '✘ wrong'}")
-    cls, head = ("pos", "Exudates detected") if positive else ("neg", "No exudates found")
-    verdict = f'<div class="verdict {cls}"><b class="big">{head}</b>{"<br>".join(lines)}</div>'
+        has = bool(gt.any())
+        tp = int((mask & gt).sum())
+        expert = {"source": gt_source, "has_exudates": has, "agrees": has == positive,
+                  "found_pct": round(100 * tp / max(int(gt.sum()), 1), 1),
+                  "correct_pct": round(100 * tp / max(marked, 1), 1),
+                  "image": data_url(compare_image(pre.rgb, mask, gt))}
 
-    result = (res.pre.rgb, overlay(res.pre.rgb, res.mask))
-    compare = compare_image(res.pre.rgb, res.mask, gt) if gt is not None else None
-    stages = [(_to_rgb(img, cmap), name, STAGE_TEXT[i].format(min_area=params.image_min_area))
-              for i, (name, img, cmap) in enumerate(step_panels(res, gt))]
-    gallery = [(img, name) for img, name, _ in stages]
-    return (verdict, result, gallery, gr.update(value=compare, visible=compare is not None),
-            stages, 0, *show_stage(stages, 0))
+    return {
+        "positive": positive,
+        "stats": {"marked_px": marked,
+                  "regions": cv2.connectedComponents(mask.astype(np.uint8))[0] - 1,
+                  "retina_pct": round(100 * marked / max(int(pre.roi.sum()), 1), 2),
+                  "min_area": params.image_min_area, "tau_acm": params.tau_acm,
+                  "seconds": round(seconds, 1)},
+        "original": data_url(pre.rgb),
+        "result": data_url(overlay(pre.rgb, mask)),
+        "result_full": data_url(overlay(pre.rgb, mask), width=pre.rgb.shape[1], quality=92),
+        "stages": stages,
+        "expert": expert,
+    }
 
-
-def show_stage(stages, i):
-    """Big image + explanation of stage i (Step-by-step tab)."""
-    if not stages:
-        return None, ""
-    img, name, text = stages[i]
-    return img, f"### Stage {i + 1} of {len(stages)} · {name}\n\n{text}"
-
-
-def step(stages, i, delta):
-    i = int(np.clip(i + delta, 0, max(len(stages) - 1, 0)))
-    return i, *show_stage(stages, i)
-
-
-def pick(stages, evt: gr.SelectData):
-    return evt.index, *show_stage(stages, evt.index)
-
-
-with gr.Blocks(title="Exudate Detection") as demo:
-    gr.Markdown(
-        "# Exudate Detection in Color Fundus Images\n"
-        "Adaptive Color Morphology — Rostamian & Shekari, *IEEE Access* 2026, Section III-A · "
-        "Borda Darius, Jecan Alexandru, Ana Mustatia",
-        elem_id="title",
-    )
-    with gr.Row(equal_height=False):
-        with gr.Column(scale=4, min_width=320):
-            inp = gr.Image(type="filepath", label="Fundus image", height=340)
-            if EXAMPLES:
-                gr.Examples(EXAMPLES, inputs=inp, label="DIARETDB1 examples (3 with exudates, 1 healthy)")
-            with gr.Accordion("Settings", open=False):
-                tau = gr.Slider(15, 45, value=Params().tau_acm, step=1, label="τ_ACM (CIEDE2000 threshold)",
-                                info="Paper: 20. Our value: 28 (chosen on IDRiD training images).")
-                min_area = gr.Number(value=Params().image_min_area, precision=0,
-                                     label="Pixels needed to call the image 'with exudates'")
-            btn = gr.Button("Detect exudates", variant="primary", size="lg")
-            with gr.Accordion("How it works", open=False):
-                gr.Markdown(HOW_IT_WORKS)
-        with gr.Column(scale=7, min_width=420):
-            verdict = gr.HTML('<div class="verdict idle"><b class="big">Waiting for an image</b>'
-                              'Upload a photo or pick an example, then press <i>Detect exudates</i>.</div>')
-            with gr.Tabs():
-                with gr.Tab("Result"):
-                    result = gr.ImageSlider(label="Original ⟷ detected exudates (blue)", height=560)
-                    compare = gr.Image(label="vs. expert ground truth: green = correct, yellow = false alarm, "
-                                             "red = missed", visible=False, height=560)
-                with gr.Tab("Step by step (Algorithm 1)"):
-                    stage_img = gr.Image(show_label=False, height=520, interactive=False)
-                    stage_md = gr.Markdown("Run the detection to see each stage here.", elem_classes="stage-text")
-                    with gr.Row():
-                        prev_btn = gr.Button("◀ Previous")
-                        next_btn = gr.Button("Next ▶", variant="primary")
-                    gallery = gr.Gallery(columns=7, height=180, object_fit="contain", allow_preview=False,
-                                         label="All stages (click to jump)")
-    stages, idx = gr.State([]), gr.State(0)
-
-    btn.click(run, [inp, tau, min_area], [verdict, result, gallery, compare, stages, idx, stage_img, stage_md])
-    prev_btn.click(lambda s, i: step(s, i, -1), [stages, idx], [idx, stage_img, stage_md])
-    next_btn.click(lambda s, i: step(s, i, +1), [stages, idx], [idx, stage_img, stage_md])
-    gallery.select(pick, [stages], [idx, stage_img, stage_md])
 
 if __name__ == "__main__":
-    demo.launch(inbrowser=True, css=CSS, theme=gr.themes.Soft(primary_hue="blue"))
+    url = f"http://127.0.0.1:{PORT}"
+    print(f"Exora is running at {url}  (close this window to stop it)")
+    threading.Timer(1.5, webbrowser.open, [url]).start()
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

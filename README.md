@@ -30,7 +30,10 @@ included, so the detector works on any image without the datasets. To regenerate
 python make_reference.py        # writes exudates/reference_stats.json
 ```
 
-## Web interface (easiest)
+## Exora: the web app (easiest)
+
+**Exora** is the web interface for the detector. The name comes from *exudate* +
+*ora serrata*, the edge of the retina.
 
 Double-click **`start.bat`** (Windows; the first run creates `.venv` and installs
 everything), or run:
@@ -39,10 +42,22 @@ everything), or run:
 python app.py                   # opens http://127.0.0.1:7860
 ```
 
-Upload a fundus image or click a DIARETDB1 example. The page shows the
-detected exudates (before/after slider), the whole-image decision, every stage of
-Algorithm 1 and, for DIARETDB1 images, a comparison with the expert ground truth.
-The examples and the ground-truth comparison need DIARETDB1 in `data/` (see below).
+Drop a fundus photo on the page or pick a sample. Exora shows:
+
+- the verdict for the whole photo and the marked area,
+- a before/after slider with the detected exudates in blue, and a download of the result,
+- every stage of Algorithm 1, with a short explanation of each,
+- for DIARETDB1 and IDRiD photos with expert annotations in `data/`, a comparison with the experts.
+
+The detection settings (τ_ACM, image rule) can be changed on the page; *Use the paper's τ = 20*
+switches to the paper's value. The interface only displays results: all analysis is done by
+`exudates/detection.py`, the same code the evaluation scripts use.
+
+| File | What it is |
+|---|---|
+| [app.py](app.py) | small web server (FastAPI) that runs the detector on an uploaded photo |
+| [web/](web/) | the page: `index.html`, `style.css`, `app.js` |
+| [examples/](examples/) | sample photos from IDRiD (P. Porwal et al., IEEE Dataport 2018, doi:10.21227/H25W98, CC BY 4.0) |
 
 ## Command line
 

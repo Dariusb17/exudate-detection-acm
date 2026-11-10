@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exora · Exudate detection</title>
+  <meta name="description" content="Finds hard exudates in color fundus photographs with adaptive color morphology.">
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- one link per family, so a missing family can't block the others -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-state="empty">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Exora home">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="2.2"/>
+        <circle cx="21.5" cy="11.5" r="3.6" fill="var(--cref)"/>
+        <circle cx="13" cy="18" r="1.6" fill="currentColor"/>
+      </svg>
+      <span class="brand-name">Exora</span>
+    </a>
+    <nav class="topnav" aria-label="Page sections">
+      <a href="#method">How it works</a>
+      <a href="#about">About</a>
+    </nav>
+    <span class="tag">Research prototype</span>
+  </header>
+
+  <main class="workspace">
+    <!-- left: upload, then the report -->
+    <section class="side" aria-label="Photo and results">
+      <div class="intro">
+        <h1>Find hard exudates in a retinal photograph.</h1>
+        <p class="lede">Upload a color fundus photo. Exora marks the yellow lipid deposits that signal
+          diabetic retinopathy, and shows each step of how it found them.</p>
+
+        <label class="drop" id="drop" for="file">
+          <input type="file" id="file" accept="image/*,.tif,.tiff">
+          <span class="drop-icon" aria-hidden="true">
+            <svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="17" fill="none" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M20 27V13M14 18.5l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="drop-text"><strong>Drop a fundus photo here</strong> or <u>choose a file</u></span>
+          <span class="drop-hint">JPG, PNG or TIF · the round retina should be visible</span>
+        </label>
+
+        <div class="samples" id="samples-block" hidden>
+          <h2 class="label">Or try a sample</h2>
+          <div class="sample-list" id="samples"></div>
+        </div>
+      </div>
+
+      <div class="report" id="report" hidden>
+        <p class="label" id="report-file"></p>
+        <div class="verdict" id="verdict">
+          <span class="verdict-dot" aria-hidden="true"></span>
+          <div>
+            <h2 id="verdict-title"></h2>
+            <p id="verdict-sub"></p>
+          </div>
+        </div>
+        <dl class="stats" id="stats"></dl>
+        <div class="expert" id="expert" hidden></div>
+        <div class="actions">
+          <a class="btn btn-primary" id="download" download="exora-result.jpg">Download result</a>
+          <button class="btn" type="button" id="again">Analyze another photo</button>
+        </div>
+      </div>
+
+      <div class="error" id="error" role="alert" hidden>
+        <p id="error-text"></p>
+        <button class="btn" type="button" id="error-again">Choose another photo</button>
+      </div>
+
+      <details class="settings" id="settings">
+        <summary>Detection settings</summary>
+        <div class="field">
+          <label for="tau">Color threshold τ<sub>ACM</sub> <output id="tau-out" for="tau"></output></label>
+          <input type="range" id="tau" min="10" max="45" step="1">
+          <p class="hint">How close to the exudate color a pixel must be (CIEDE2000). Paper: 20 · Exora default: 28.</p>
+        </div>
+        <div class="field">
+          <label for="minarea">Pixels needed to call a photo “with exudates”</label>
+          <input type="number" id="minarea" min="0" step="100" inputmode="numeric">
+        </div>
+        <div class="settings-actions">
+          <button class="link" type="button" id="paper-values">Use the paper's τ = 20</button>
+          <button class="link" type="button" id="defaults">Reset to defaults</button>
+        </div>
+      </details>
+    </section>
+
+    <!-- right: the viewer -->
+    <section class="stage" aria-label="Viewer">
+      <div class="stage-bar">
+        <div class="tabs" role="tablist" aria-label="View">
+          <button role="tab" id="tab-result" aria-selected="true" aria-controls="view">Result</button>
+          <button role="tab" id="tab-steps" aria-selected="false" aria-controls="view">Step by step</button>
+          <button role="tab" id="tab-expert" aria-selected="false" aria-controls="view" hidden>Expert check</button>
+        </div>
+        <p class="stage-status" id="status" aria-live="polite"></p>
+      </div>
+
+      <div class="aperture" id="view">
+        <svg class="reticle" viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="ring" cx="50" cy="50" r="48.6"/>
+          <g id="ticks"></g>
+          <circle class="sweep" cx="50" cy="50" r="48.6" pathLength="100"/>
+        </svg>
+        <div class="viewport" id="viewport">
+          <p class="placeholder" id="placeholder">No photo yet</p>
+          <div class="compare" id="compare" hidden>
+            <img id="img-before" alt="Original photo">
+            <img id="img-after" alt="Photo with detected exudates in blue">
+            <div class="split" id="split" aria-hidden="true"><span></span></div>
+            <input type="range" class="split-input" id="split-input" min="0" max="100" value="50"
+                   aria-label="Compare original and result">
+            <span class="corner corner-l">Original</span>
+            <span class="corner corner-r">Detected</span>
+          </div>
+          <img class="single" id="img-single" alt="" hidden>
+        </div>
+      </div>
+
+      <div class="legend" id="legend"></div>
+
+      <div class="steps" id="steps" hidden>
+        <div class="step-caption">
+          <p class="step-meta"><span id="step-group"></span> · step <span id="step-num"></span> of <span id="step-total"></span></p>
+          <h3 id="step-title"></h3>
+          <p id="step-text"></p>
+        </div>
+        <div class="step-nav">
+          <button class="btn btn-dark" type="button" id="prev" aria-label="Previous step">←</button>
+          <button class="btn btn-dark" type="button" id="next" aria-label="Next step">→</button>
+        </div>
+        <ol class="strip" id="strip" aria-label="All steps"></ol>
+      </div>
+    </section>
+  </main>
+
+  <section class="method" id="method">
+    <div class="method-head">
+      <h2>How Exora finds exudates</h2>
+      <p>It implements the exudate part (Section III-A) of Rostamian &amp; Shekari's adaptive color
+        morphology method. Four stages, in this order:</p>
+    </div>
+    <ol class="method-steps">
+      <li><h3>Pre-processing</h3><p>Colors are converted to CIE L*a*b* and matched to a reference photo, so every camera looks alike.</p></li>
+      <li><h3>Candidate extraction</h3><p>Adaptive color morphology highlights regions close to the exudate color, measured with CIEDE2000.</p></li>
+      <li><h3>Look-alike removal</h3><p>The optic disc, blood vessels and the border of the image are taken out of the candidates.</p></li>
+      <li><h3>Segmentation &amp; refinement</h3><p>Morphological reconstruction, a brightness threshold and a Sobel edge filter keep the real lesions.</p></li>
+    </ol>
+    <figure class="swatch">
+      <div class="swatch-chip" aria-hidden="true"></div>
+      <figcaption>
+        <span class="mono">C<sub>ref</sub> · L* 85 · a* 10 · b* 40</span>
+        The reference exudate color. Every pixel is compared against it.
+      </figcaption>
+    </figure>
+  </section>
+
+  <footer class="about" id="about">
+    <div>
+      <h2 class="label">Method</h2>
+      <p>M. Rostamian, M. Shekari. <i>Designing an Adaptive Color Morphology Operator for Exudates and
+        Microaneurysms Detection in Color Fundus Images.</i> IEEE Access, vol. 14, pp. 54937–54953, 2026.</p>
+    </div>
+    <div>
+      <h2 class="label">Team</h2>
+      <p>Borda Darius, Jecan Alexandru, Ana Mustatia</p>
+    </div>
+    <div>
+      <h2 class="label">Data</h2>
+      <p>Tested on DIARETDB1 and IDRiD. Sample photos: IDRiD (CC BY 4.0).</p>
+    </div>
+    <p class="disclaimer">Exora is a university research prototype, not a medical device. Don't use it to diagnose anyone.</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
