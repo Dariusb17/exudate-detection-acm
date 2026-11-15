@@ -38,7 +38,7 @@ TAU_ACM = 20.0               # CIEDE2000 distance threshold (Table 1)
 def reference_distance(lab: np.ndarray, roi: np.ndarray, c_ref=C_REF) -> np.ndarray:
     """CIEDE2000 distance of every pixel to C_ref (infinite outside the ROI)."""
     dist = delta_e00(lab, np.asarray(c_ref, np.float32))
-    dist[~roi] = np.inf
+    dist[~roi] = np.inf          # background: never counts as exudate
     return dist
 
 
@@ -56,7 +56,7 @@ class AdaptiveColorMorphology:
         rank = np.empty(flat.size, np.int64)
         rank[self.order] = np.arange(flat.size)
         self.rank = rank.reshape(self.dist.shape).astype(np.float32)  # exact below 2**24 px
-        self.colors = lab.reshape(-1, 3)
+        self.colors = lab.reshape(-1, 3)   # flat list of colors: pixel index -> its Lab color
 
     def _winner(self, rank_img: np.ndarray) -> np.ndarray:
         """Flat index of the pixel holding each rank."""
@@ -64,7 +64,9 @@ class AdaptiveColorMorphology:
 
     def dilate(self, se: np.ndarray) -> np.ndarray:
         """Eq. (17)."""
-        q = self._winner(cv2.erode(self.rank, se, borderType=cv2.BORDER_REPLICATE))  # min distance
+        # for every pixel: the neighbor CLOSEST to C_ref (min filter on the rank)
+        q = self._winner(cv2.erode(self.rank, se, borderType=cv2.BORDER_REPLICATE))
+        # replace only if that neighbor is within tau
         apply = self.dist.ravel()[q].reshape(self.dist.shape) < self.tau
         out = self.lab.copy()
         out[apply] = self.colors[q.reshape(self.dist.shape)[apply]]
@@ -72,7 +74,9 @@ class AdaptiveColorMorphology:
 
     def erode(self, se: np.ndarray) -> np.ndarray:
         """Eq. (18)."""
-        q = self._winner(cv2.dilate(self.rank, se, borderType=cv2.BORDER_REPLICATE))  # max distance
+        # for every pixel: the neighbor FARTHEST from C_ref (max filter on the rank)
+        q = self._winner(cv2.dilate(self.rank, se, borderType=cv2.BORDER_REPLICATE))
+        # replace only pixels that are themselves within tau
         apply = self.dist < self.tau
         out = self.lab.copy()
         out[apply] = self.colors[q.reshape(self.dist.shape)[apply]]
@@ -80,4 +84,5 @@ class AdaptiveColorMorphology:
 
     def gradient(self, se: np.ndarray) -> np.ndarray:
         """Eq. (19): G = CIEDE2000(A dilate B, A erode B)."""
+        # high where dilation and erosion differ = borders of exudate-colored regions
         return delta_e00(self.dilate(se), self.erode(se))
