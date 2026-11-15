@@ -41,7 +41,8 @@ class Params:
     cand_dilate: int = 4              # "filling candidate regions with dilation", px (not in paper)
     tau_recon: float = 10.0           # threshold on mask - reconstruction, gray levels (not in paper)
     tau_edge: float = 30.0            # Sobel magnitude threshold (not in paper)
-    edge_density: float = 0.3         # min fraction of edge pixels per region (not in paper)
+    edge_density: float = 0.1         # min fraction of edge pixels on a region's outline (not in paper)
+    edge_mode: str = "outline"        # where edges are counted: "outline", "area" or "pixel" (see below)
     final_dilate: int = 5             # (paper) final 5x5 dilation
     od_method: str = "entropy"        # "entropy" (paper) or "brightness" (our alternative)
     image_min_area: int = 2000        # px marked to call an image "with exudates" (not in paper)
@@ -61,13 +62,25 @@ class Result:
     od_center: tuple | None = None
 
 
-def _keep_edge_dense_regions(mask, edges, min_density):
-    """Remove regions whose fraction of strong-edge pixels (region + 1 px
-    border) is below min_density ("regions with sparse edge pixel density")."""
+def _keep_edge_dense_regions(mask, edges, min_density, mode="outline"):
+    """Remove regions that do not correspond to strong edges.
+
+    The fraction of strong-edge pixels is measured per region and regions
+    below min_density are removed. Where it is measured depends on `mode`:
+
+      "outline"  on the region's outline only (a 3 px ring: 1 px outside,
+                 2 px inside). Exudates have sharp borders, but a large plaque
+                 is smooth inside, so its outline is what must be sharp.
+      "area"     on the whole region (+ 1 px border). Our first version; it
+                 removes large solid exudates, whose interior has no edges.
+    """
     n, labels = cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)
     if n <= 1:
         return mask.copy()
     grown = cv2.dilate(labels.astype(np.float32), np.ones((3, 3), np.uint8)).astype(np.int64)
+    if mode == "outline":
+        core = cv2.erode(mask.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+        grown[core] = 0                                   # keep only the ring around each region
     total = np.bincount(grown.ravel(), minlength=n)
     edge = np.bincount(grown.ravel(), weights=edges.ravel().astype(float), minlength=n)
     keep = edge / np.maximum(total, 1) >= min_density
@@ -131,7 +144,10 @@ def detect_exudates(rgb_full: np.ndarray | None, params: Params | None = None,
     gy = cv2.Sobel(green, cv2.CV_32F, 0, 1, ksize=3)
     sobel = np.hypot(gx, gy)
     e_edges = sobel > p.tau_edge
-    e_refined = _keep_edge_dense_regions(e_init, e_edges, p.edge_density)
+    if p.edge_mode == "pixel":                            # Algorithm 1, line 21, taken literally
+        e_refined = e_init & e_edges
+    else:                                                 # the text: remove regions without strong edges
+        e_refined = _keep_edge_dense_regions(e_init, e_edges, p.edge_density, p.edge_mode)
 
     k = p.final_dilate
     e = cv2.dilate(e_refined.astype(np.uint8), np.ones((k, k), np.uint8)).astype(bool) if k > 1 else e_refined
