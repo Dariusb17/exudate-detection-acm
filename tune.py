@@ -49,7 +49,7 @@ def main():
     img_dir = root / "1. Original Images" / SPLITS["train"]
     gt_dir = root / "2. All Segmentation Groundtruths" / SPLITS["train"] / "3. Hard Exudates"
     files = sorted(img_dir.glob("*.jpg"))
-    files = files[:: max(1, len(files) // args.n_images)][: args.n_images]
+    files = files[:: max(1, len(files) // args.n_images)][: args.n_images]    # evenly spread subset
 
     print(f"Preprocessing {len(files)} training images...")
     data = []
@@ -57,7 +57,7 @@ def main():
         pre = preprocess(load_rgb(f))
         data.append((f.stem, pre, load_gt_mask(gt_dir / f"{f.stem}_EX.tif", pre) & pre.roi))
 
-    rng = random.Random(args.seed)
+    rng = random.Random(args.seed)             # fixed seed: the search is repeatable
     best_p = Params()
     best = score(best_p, data)
     print(f"default: F1={best['pixel_f1']:.3f}")
@@ -72,7 +72,7 @@ def main():
         else:
             cand = Params(**{k: rng.choice(v) for k, v in SPACE.items()})
         s = score(cand, data)
-        if s["pixel_f1"] > best["pixel_f1"]:
+        if s["pixel_f1"] > best["pixel_f1"]:     # keep the candidate only if it is better
             best_p, best = cand, s
             print(f"trial {t:3d}: F1={s['pixel_f1']:.3f} SE={s['pixel_sensitivity']:.3f} "
                   f"PPV={s['pixel_ppv']:.3f} lesionSE={s['lesion_sensitivity']:.3f}  "

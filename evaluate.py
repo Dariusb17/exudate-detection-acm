@@ -24,6 +24,7 @@ SPLITS = {"train": "a. Training Set", "test": "b. Testing Set"}
 
 
 def find_root(base: Path) -> Path:
+    # accept data/IDRiD or any folder above/below 'A. Segmentation'
     for cand in [base, *base.rglob("1. Original Images")]:
         root = cand.parent if cand.name == "1. Original Images" else cand
         if (root / "1. Original Images").is_dir():
@@ -54,11 +55,11 @@ def main():
     rows = []
     for f in images:
         gt_path = gt_dir / f"{f.stem}_EX.tif"
-        if not gt_path.exists():
+        if not gt_path.exists():           # image without exudate annotation
             continue
         t = time.time()
         res = detect_exudates(load_rgb(f), params)
-        gt = load_gt_mask(gt_path, res.pre) & res.pre.roi
+        gt = load_gt_mask(gt_path, res.pre) & res.pre.roi          # expert mask, same size as the result
         row = dict(image=f.stem, **pixel_metrics(res.mask, gt, res.pre.roi), **lesion_metrics(res.mask, gt))
         rows.append(row)
         s = summarize([row])
@@ -74,7 +75,7 @@ def main():
         w = csv.DictWriter(fh, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
-    summary = summarize(rows)
+    summary = summarize(rows)              # totals over all images
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
     print("\n=== Summary ({} images, {} set) ===".format(summary["images"], args.split))
     for k, v in summary.items():

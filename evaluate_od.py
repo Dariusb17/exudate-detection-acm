@@ -27,13 +27,13 @@ def main():
         for f in sorted((root / "1. Original Images" / split).glob("*.jpg")):
             pre = preprocess(load_rgb(f))
             gt = load_gt_mask(root / "2. All Segmentation Groundtruths" / split / "5. Optic Disc" / f"{f.stem}_OD.tif", pre)
-            vessels = anatomy.detect_vessels(pre.green, pre.roi, pre.diameter)
+            vessels = anatomy.detect_vessels(pre.green, pre.roi, pre.diameter)   # needed by the brightness method
             for m in methods:
                 if m == "entropy":
                     _, c = anatomy.detect_optic_disc_entropy(pre.rgb, pre.roi, pre.diameter)
                 else:
                     _, c = anatomy.detect_optic_disc_brightness(pre.rgb, pre.roi, vessels, pre.diameter)
-                ok = c is not None and gt[c[1], c[0]]
+                ok = c is not None and gt[c[1], c[0]]      # center inside the expert OD mask?
                 (hits if ok else misses)[m].append(f.stem)
     for m in methods:
         n = len(hits[m]) + len(misses[m])

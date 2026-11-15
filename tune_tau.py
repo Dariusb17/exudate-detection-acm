@@ -24,13 +24,14 @@ MIN_AREAS = [25, 100, 250, 500, 1000, 2000]
 
 
 def main():
+    # every 3rd training image with exudates, and every 5th healthy one
     seg_files = sorted((SEG / "1. Original Images/a. Training Set").glob("*.jpg"))[::3][:15]
     rows = list(csv.reader(open(GRD / "2. Groundtruths/a. IDRiD_Disease Grading_Training Labels.csv")))
     healthy = [r[0] for r in rows[1:] if r and r[0] and r[1] == "0" and r[2] == "0"][::5][:25]
 
     results = {t: {"pos_px": [], "neg_px": [], "pix": []} for t in TAUS}
     for f in seg_files:
-        pre = preprocess(load_rgb(f))
+        pre = preprocess(load_rgb(f))              # once per image, shared by all tau values
         gt = load_gt_mask(SEG / "2. All Segmentation Groundtruths/a. Training Set/3. Hard Exudates" / f"{f.stem}_EX.tif", pre) & pre.roi
         for t in TAUS:
             res = detect_exudates(None, replace(Params(), tau_acm=t), pre=pre)
@@ -50,7 +51,7 @@ def main():
         f1 = summarize(results[t]["pix"])["pixel_f1"]
         pos, neg = np.array(results[t]["pos_px"]), np.array(results[t]["neg_px"])
         for a in MIN_AREAS:
-            se, sp = np.mean(pos >= a), np.mean(neg < a)
+            se, sp = np.mean(pos >= a), np.mean(neg < a)      # image-level sensitivity / specificity
             bal = (se + sp) / 2
             score = bal + f1
             print(f"{t:5.0f} {f1:6.3f} {a:8d} {se:5.2f} {sp:5.2f} {bal:7.3f}")

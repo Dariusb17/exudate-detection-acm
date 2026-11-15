@@ -29,11 +29,13 @@ def main():
     args = ap.parse_args()
 
     src = Path(args.input)
+    # one file, or every image in a folder
     files = sorted(f for f in src.iterdir() if f.suffix.lower() in EXTS) if src.is_dir() else [src]
     out = Path(args.out)
     for f in files:
         t = time.time()
         res = detect_exudates(load_rgb(f), Params.from_flags(args.paper_values, args.strict_paper))
+        # original and result side by side, then the mask alone
         save_rgb(out / f"{f.stem}_overlay.png", np.hstack([res.pre.rgb, overlay(res.pre.rgb, res.mask)]))
         save_rgb(out / f"{f.stem}_mask.png", np.dstack([res.mask.astype(np.uint8) * 255] * 3))
         if args.steps:

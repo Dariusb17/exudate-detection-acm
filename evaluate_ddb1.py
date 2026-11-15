@@ -29,6 +29,7 @@ CONF_LEVEL = 0.75
 def load_gt(path, pre, level=CONF_LEVEL):
     """Confidence map (0..1) -> binary mask at the working geometry."""
     g = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_GRAYSCALE).astype(np.float32) / 252.0
+    # same crop and resize as the photo went through
     y0, y1, x0, x1 = pre.crop_box
     g = cv2.resize(g[y0:y1, x0:x1], pre.roi.shape[::-1], interpolation=cv2.INTER_NEAREST)
     return (g >= level - 1e-3) & pre.roi
@@ -56,9 +57,9 @@ def main():
     for f in images:
         res = detect_exudates(load_rgb(f), params)
         gt = load_gt(root / "ddb1_groundtruth" / "hardexudates" / f.name, res.pre)
-        has_gt = bool(gt.any())
+        has_gt = bool(gt.any())                   # experts marked exudates in this image
         detected = int(res.mask.sum())
-        pred = detected >= min_area
+        pred = detected >= min_area               # our decision for the whole image
         tp = int((res.mask & gt).sum()); fp = int((res.mask & ~gt).sum()); fn = int((~res.mask & gt).sum())
         rows.append(dict(image=f.stem, gt_exudates=int(has_gt), predicted=int(pred), detected_px=detected,
                          tp=tp, fp=fp, fn=fn))
@@ -68,6 +69,7 @@ def main():
         if args.steps:
             step_figure(res, out / f"{f.stem}_steps.jpg", gt=gt, title=f.stem)
 
+    # image-level confusion matrix
     gt_v = np.array([r["gt_exudates"] for r in rows], bool)
     pr_v = np.array([r["predicted"] for r in rows], bool)
     TP, TN = int(np.sum(gt_v & pr_v)), int(np.sum(~gt_v & ~pr_v))
