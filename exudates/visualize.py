@@ -12,7 +12,7 @@ from .detection import Result, overlay
 
 def _tint(rgb, mask, color, alpha=0.6):
     out = rgb.copy()
-    out[mask] = (out[mask] * (1 - alpha) + np.array(color) * alpha).astype(np.uint8)
+    out[mask] = (out[mask] * (1 - alpha) + np.array(color) * alpha).astype(np.uint8)   # blend color into the photo
     return out
 
 
@@ -20,11 +20,12 @@ def step_panels(res: Result, gt: np.ndarray | None = None) -> list:
     """(title, image, colormap or None) for every stage of Algorithm 1."""
     s, pre = res.steps, res.pre
     rgb = pre.rgb
+    # optic disc, border and vessels drawn on the photo
     anat = _tint(rgb, s["od"], (255, 0, 255))
     anat = _tint(anat, s["border"], (0, 255, 255))
     anat[s["vessels"]] = (0, 255, 0)
     dist = s["distance"].copy()
-    dist[~pre.roi] = 0
+    dist[~pre.roi] = 0                       # outside the retina the distance is infinite
 
     panels = [
         ("Input", rgb, None),
@@ -47,21 +48,21 @@ def step_panels(res: Result, gt: np.ndarray | None = None) -> list:
 
 def compare_image(rgb, mask, gt):
     out = rgb.copy()
-    out[gt & ~mask] = (255, 0, 0)
-    out[mask & ~gt] = (255, 255, 0)
-    out[mask & gt] = (0, 255, 0)
+    out[gt & ~mask] = (255, 0, 0)        # red: missed
+    out[mask & ~gt] = (255, 255, 0)      # yellow: false alarm
+    out[mask & gt] = (0, 255, 0)         # green: correct
     return out
 
 
 def step_figure(res: Result, path, gt: np.ndarray | None = None, title: str = "") -> None:
     panels = step_panels(res, gt)
-    cols = 4
+    cols = 4                                 # panels per row
     rows = int(np.ceil(len(panels) / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 4.2 * rows))
     for ax in axes.ravel():
         ax.axis("off")
     for ax, (name, img, cmap) in zip(axes.ravel(), panels):
-        if cmap:
+        if cmap:                             # masks and maps: colormap, scaled to the 99.8th percentile
             img = img.astype(np.float32)
             ax.imshow(img, cmap=cmap, vmin=0, vmax=max(1e-6, float(np.percentile(img, 99.8))))
         else:

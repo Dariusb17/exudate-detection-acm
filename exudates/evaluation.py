@@ -10,15 +10,16 @@ from .preprocessing import Preprocessed
 
 
 def load_rgb(path) -> np.ndarray:
+    # read bytes + decode (cv2.imread fails on some Windows paths)
     bgr = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_COLOR)
     if bgr is None:
         raise FileNotFoundError(path)
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)    # OpenCV uses BGR order
 
 
 def save_rgb(path, rgb: np.ndarray) -> None:
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)          # create the output folder if needed
     ok, buf = cv2.imencode(path.suffix or ".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     buf.tofile(str(path))
 
@@ -28,6 +29,7 @@ def load_gt_mask(path, pre: Preprocessed) -> np.ndarray:
     img = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_UNCHANGED)
     if img.ndim == 3:
         img = img[..., :3].max(axis=2)   # some IDRiD masks carry an opaque alpha channel
+    # same crop and resize as the photo went through
     y0, y1, x0, x1 = pre.crop_box
     m = (img[y0:y1, x0:x1] > 0).astype(np.float32)
     h, w = pre.roi.shape
@@ -36,7 +38,8 @@ def load_gt_mask(path, pre: Preprocessed) -> np.ndarray:
 
 
 def pixel_metrics(pred: np.ndarray, gt: np.ndarray, fov: np.ndarray) -> dict:
-    p, g = pred & fov, gt & fov
+    p, g = pred & fov, gt & fov                    # only pixels inside the retina count
+    # tp = marked by both, fp = marked only by us, fn = marked only by the experts
     tp = int(np.sum(p & g)); fp = int(np.sum(p & ~g)); fn = int(np.sum(~p & g))
     return dict(tp=tp, fp=fp, fn=fn)
 
@@ -46,14 +49,15 @@ def lesion_metrics(pred: np.ndarray, gt: np.ndarray) -> dict:
     detected region counts as correct if it touches any GT lesion."""
     ng, lg = cv2.connectedComponents(gt.astype(np.uint8), connectivity=8)
     npd, lp = cv2.connectedComponents(pred.astype(np.uint8), connectivity=8)
-    gt_hit = np.unique(lg[pred & (lg > 0)])
-    pd_hit = np.unique(lp[gt & (lp > 0)])
+    gt_hit = np.unique(lg[pred & (lg > 0)])        # expert lesions touched by a detection
+    pd_hit = np.unique(lp[gt & (lp > 0)])          # detected regions touching an expert lesion
     return dict(gt_lesions=ng - 1, gt_found=len(gt_hit),
                 det_regions=npd - 1, det_correct=len(pd_hit))
 
 
 def summarize(rows: list[dict]) -> dict:
     tp = sum(r["tp"] for r in rows); fp = sum(r["fp"] for r in rows); fn = sum(r["fn"] for r in rows)
+    # sensitivity = share of the expert area found; PPV = share of our marking that is correct
     se = tp / max(tp + fn, 1); ppv = tp / max(tp + fp, 1)
     f1 = 2 * se * ppv / max(se + ppv, 1e-9)
     gl = sum(r["gt_lesions"] for r in rows); gf = sum(r["gt_found"] for r in rows)
