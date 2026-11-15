@@ -45,7 +45,7 @@ SAMPLES = {
     "idrid-03": (HERE / "examples/IDRiD_03.jpg", "IDRiD 03", "Exudates"),
     "idrid-10": (HERE / "examples/IDRiD_10.jpg", "IDRiD 10", "Exudates"),
     "idrid-25": (HERE / "examples/IDRiD_25.jpg", "IDRiD 25", "Exudates"),
-    "idrid-118": (HERE / "examples/IDRiD_118.jpg", "IDRiD 118", "Healthy"),
+    "idrid-167": (HERE / "examples/IDRiD_167.jpg", "IDRiD 167", "Healthy"),
     "ddb1-016": (DDB1 / "ddb1_fundusimages/image016.png", "DIARETDB1 016", "Exudates"),
     "ddb1-019": (DDB1 / "ddb1_fundusimages/image019.png", "DIARETDB1 019", "Exudates"),
     "ddb1-060": (DDB1 / "ddb1_fundusimages/image060.png", "DIARETDB1 060", "Healthy"),
