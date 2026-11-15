@@ -10,7 +10,7 @@ const els = {
   verdictTitle: $("verdict-title"), verdictSub: $("verdict-sub"), stats: $("stats"), expert: $("expert"),
   download: $("download"), again: $("again"), error: $("error"), errorText: $("error-text"),
   errorAgain: $("error-again"), tau: $("tau"), tauOut: $("tau-out"), minarea: $("minarea"),
-  paperValues: $("paper-values"), defaults: $("defaults"),
+  paperValues: $("paper-values"), defaults: $("defaults"), strict: $("strict"),
   status: $("status"), placeholder: $("placeholder"), compare: $("compare"),
   before: $("img-before"), after: $("img-after"), single: $("img-single"),
   splitInput: $("split-input"), legend: $("legend"),
@@ -118,6 +118,7 @@ async function analyze(file) {
   body.append("image", file, file.name);
   body.append("tau_acm", els.tau.value);
   body.append("min_area", els.minarea.value || "0");
+  body.append("strict", els.strict.checked ? "true" : "false");
 
   let res;
   try {
@@ -149,7 +150,7 @@ function fail(message) {
 function render() {
   const r = current, s = r.stats;
   setState("done");
-  setStatus(`${r.fileName} · ${s.seconds} s`);
+  setStatus(`${r.fileName} · ${s.seconds} s${s.strict ? " · strict paper mode" : ""}`);
   document.querySelector(".intro").hidden = true;
   els.report.hidden = false;
   els.reportFile.textContent = r.fileName;
@@ -332,11 +333,17 @@ els.splitInput.addEventListener("input", () => {
 els.tau.addEventListener("input", () => { els.tauOut.textContent = els.tau.value; });
 els.tau.addEventListener("change", settingsChanged);
 els.minarea.addEventListener("change", settingsChanged);
+els.strict.addEventListener("change", () => {
+  els.tau.disabled = els.strict.checked;      // strict mode always uses the paper's tau
+  settingsChanged();
+});
 els.paperValues.addEventListener("click", () => {
   showSettings(config.paper_tau_acm, els.minarea.value);
   settingsChanged();
 });
 els.defaults.addEventListener("click", () => {
+  els.strict.checked = false;
+  els.tau.disabled = false;
   showSettings(config.tau_acm, config.min_area);
   settingsChanged();
 });

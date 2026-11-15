@@ -87,8 +87,8 @@ STAGES = [
      "Only pixels more than 10 gray levels brighter than their reconstructed background are kept, "
      "which drops spots that have the right color but are not bright lesions."),
     ("Segmentation & refinement", "Edge filter",
-     "Exudates have <b>sharp borders</b>. Edges come from the <b>Sobel</b> operator; regions with few "
-     "edge pixels (smooth reflections, blur) are removed."),
+     "Exudates have <b>sharp borders</b>. Edges come from the <b>Sobel</b> operator; regions whose "
+     "outline has few edge pixels (smooth reflections, blur) are removed."),
     ("Segmentation & refinement", "Final mask",
      "A final <b>5×5 dilation</b> gives the exudate mask, painted blue. With at least {min_area:,} marked "
      "pixels the photo is classified as <b>with exudates</b>."),
@@ -96,6 +96,15 @@ STAGES = [
      "Detection against the experts' annotation: <b>green</b> = found, <b>yellow</b> = marked by Exora "
      "only, <b>red</b> = marked by the experts only."),
 ]
+
+# Texts that differ when Algorithm 1 is followed literally (strict paper mode)
+STRICT_TEXT = {
+    6: "Structures that can be mistaken for exudates: the <b>optic disc</b> (magenta, here taken from the "
+       "<b>lowest</b>-entropy candidates, as the paper states), <b>blood vessels</b> (green) and the "
+       "<b>border</b> of the field of view (cyan).",
+    7: "Candidates on the optic disc, vessels or border are removed.",
+    10: "Algorithm 1, line 21, taken literally: only pixels that are also <b>Sobel</b> edges are kept.",
+}
 
 app = FastAPI(title="Exora")
 app.mount("/static", StaticFiles(directory=WEB), name="static")
@@ -172,11 +181,14 @@ def sample_thumb(sid: str):
 
 @app.post("/api/analyze")
 def analyze(image: UploadFile = File(...), tau_acm: float = Form(Params.tau_acm),
-            min_area: int = Form(Params.image_min_area)):
+            min_area: int = Form(Params.image_min_area), strict: bool = Form(False)):
     bgr = cv2.imdecode(np.frombuffer(image.file.read(), np.uint8), cv2.IMREAD_COLOR)
     if bgr is None:
         raise HTTPException(400, "This file can't be read as an image. Use a JPG, PNG or TIF photo.")
-    params = replace(Params(), tau_acm=float(np.clip(tau_acm, 10, 45)), image_min_area=max(0, int(min_area)))
+    if strict:      # Algorithm 1 as written, for comparison
+        params = Params.paper_strict(image_min_area=max(0, int(min_area)))
+    else:
+        params = replace(Params(), tau_acm=float(np.clip(tau_acm, 10, 45)), image_min_area=max(0, int(min_area)))
 
     t0 = time.time()
     try:
@@ -194,6 +206,8 @@ def analyze(image: UploadFile = File(...), tau_acm: float = Form(Params.tau_acm)
     stages = []
     for i, (name, img, cmap) in enumerate(step_panels(res, gt)):
         group, title, text = STAGES[i]
+        if strict:
+            text = STRICT_TEXT.get(i, text)
         stages.append({"group": group, "title": title, "text": text.format(min_area=params.image_min_area),
                        "image": data_url(to_picture(img, cmap))})
 
@@ -211,7 +225,7 @@ def analyze(image: UploadFile = File(...), tau_acm: float = Form(Params.tau_acm)
         "stats": {"marked_px": marked,
                   "regions": cv2.connectedComponents(mask.astype(np.uint8))[0] - 1,
                   "retina_pct": round(100 * marked / max(int(pre.roi.sum()), 1), 2),
-                  "min_area": params.image_min_area, "tau_acm": params.tau_acm,
+                  "min_area": params.image_min_area, "tau_acm": params.tau_acm, "strict": strict,
                   "seconds": round(seconds, 1)},
         "original": data_url(pre.rgb),
         "result": data_url(overlay(pre.rgb, mask)),

@@ -190,6 +190,9 @@ button { font: inherit; color: inherit; }
   border: 1px solid #B9C3CA; border-radius: 10px; background: var(--surface);
 }
 .hint { font-size: 14px; color: var(--muted); }
+.field.check label { justify-content: flex-start; align-items: center; gap: 10px; cursor: pointer; }
+.field.check input { width: 18px; height: 18px; margin: 0; accent-color: var(--ink); }
+.field input:disabled { opacity: .45; }
 .settings-actions { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 18px; }
 .link {
   background: none; border: 0; padding: 0; cursor: pointer;

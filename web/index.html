@@ -88,6 +88,11 @@
           <label for="minarea">Pixels needed to call a photo “with exudates”</label>
           <input type="number" id="minarea" min="0" step="100" inputmode="numeric">
         </div>
+        <div class="field check">
+          <label for="strict"><input type="checkbox" id="strict"> Follow Algorithm 1 literally</label>
+          <p class="hint">Exactly as written in the paper: τ = 20, optic disc from low-entropy areas, pixel-wise
+            edge filter. For comparison with Exora's settings.</p>
+        </div>
         <div class="settings-actions">
           <button class="link" type="button" id="paper-values">Use the paper's τ = 20</button>
           <button class="link" type="button" id="defaults">Reset to defaults</button>
