@@ -70,6 +70,6 @@ def step_figure(res: Result, path, gt: np.ndarray | None = None, title: str = ""
         ax.set_title(name, fontsize=11)
     if title:
         fig.suptitle(title, fontsize=14)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.97) if title else None)   # leave room for the figure title
     fig.savefig(path, dpi=80)
     plt.close(fig)
