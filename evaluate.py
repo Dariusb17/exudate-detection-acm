@@ -39,6 +39,7 @@ def main():
     ap.add_argument("--steps", action="store_true")
     ap.add_argument("--out", default=None)
     ap.add_argument("--paper-values", action="store_true", help="use the paper's tau_ACM = 20 instead of the tuned value")
+    ap.add_argument("--strict-paper", action="store_true", help="follow Algorithm 1 literally (see README)")
     args = ap.parse_args()
 
     root = find_root(Path(args.data))
@@ -49,7 +50,7 @@ def main():
     if args.limit:
         images = images[: args.limit]
 
-    params = Params.paper() if args.paper_values else Params()
+    params = Params.from_flags(args.paper_values, args.strict_paper)
     rows = []
     for f in images:
         gt_path = gt_dir / f"{f.stem}_EX.tif"

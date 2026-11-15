@@ -77,3 +77,12 @@ def test_pixel_mode_keeps_only_edge_pixels(result):
     res = detect_exudates(None, p, pre=result.pre)
     expected = res.steps["e_init"] & (res.steps["sobel"] > p.tau_edge)
     assert np.array_equal(res.steps["e_refined"], expected)
+
+
+def test_strict_paper_mode_uses_the_values_of_algorithm_1():
+    p = Params.paper_strict()
+    assert (p.tau_acm, p.tau_binarize, p.final_dilate) == (20.0, 0.15, 5)
+    assert (p.od_method, p.edge_mode, p.cand_dilate) == ("entropy_low", "pixel", 0)
+    assert Params.from_flags(strict_paper=True) == p
+    assert Params.from_flags(paper_values=True).tau_acm == 20.0
+    assert Params.from_flags() == Params()

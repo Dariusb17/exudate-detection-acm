@@ -25,6 +25,7 @@ def main():
     ap.add_argument("--out", default="results/detect", help="output folder")
     ap.add_argument("--steps", action="store_true", help="also save the step-by-step figure")
     ap.add_argument("--paper-values", action="store_true", help="use the paper's tau_ACM = 20 instead of the tuned value")
+    ap.add_argument("--strict-paper", action="store_true", help="follow Algorithm 1 literally (see README)")
     args = ap.parse_args()
 
     src = Path(args.input)
@@ -32,7 +33,7 @@ def main():
     out = Path(args.out)
     for f in files:
         t = time.time()
-        res = detect_exudates(load_rgb(f), Params.paper() if args.paper_values else Params())
+        res = detect_exudates(load_rgb(f), Params.from_flags(args.paper_values, args.strict_paper))
         save_rgb(out / f"{f.stem}_overlay.png", np.hstack([res.pre.rgb, overlay(res.pre.rgb, res.mask)]))
         save_rgb(out / f"{f.stem}_mask.png", np.dstack([res.mask.astype(np.uint8) * 255] * 3))
         if args.steps:

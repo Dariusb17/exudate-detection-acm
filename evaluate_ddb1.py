@@ -42,6 +42,7 @@ def main():
     ap.add_argument("--steps", action="store_true")
     ap.add_argument("--out", default="results/eval_ddb1")
     ap.add_argument("--paper-values", action="store_true", help="use the paper's tau_ACM = 20 instead of the tuned value")
+    ap.add_argument("--strict-paper", action="store_true", help="follow Algorithm 1 literally (see README)")
     args = ap.parse_args()
 
     root = Path(args.data)
@@ -49,7 +50,7 @@ def main():
     if args.limit:
         images = images[: args.limit]
     out = Path(args.out)
-    params = Params.paper() if args.paper_values else Params()
+    params = Params.from_flags(args.paper_values, args.strict_paper)
     min_area = args.min_area if args.min_area is not None else params.image_min_area
     rows = []
     for f in images:

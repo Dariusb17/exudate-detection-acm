@@ -44,7 +44,7 @@ class Params:
     edge_density: float = 0.1         # min fraction of edge pixels on a region's outline (not in paper)
     edge_mode: str = "outline"        # where edges are counted: "outline", "area" or "pixel" (see below)
     final_dilate: int = 5             # (paper) final 5x5 dilation
-    od_method: str = "entropy"        # "entropy" (paper) or "brightness" (our alternative)
+    od_method: str = "entropy"        # "entropy" (highest entropy), "entropy_low" (paper as written), "brightness"
     image_min_area: int = 2000        # px marked to call an image "with exudates" (not in paper)
 
     @classmethod
@@ -52,6 +52,22 @@ class Params:
         """Strictly the paper's Table 1 values (tau_ACM = 20, G normalized by its
         maximum); settings the paper does not give keep their tuned values."""
         return cls(**{"tau_acm": TAU_ACM, "g_norm": "max", **kw})
+
+    @classmethod
+    def paper_strict(cls, **kw) -> "Params":
+        """Algorithm 1 taken literally wherever the paper is specific:
+        tau_ACM = 20, optic disc from the low-entropy candidates, pixel-wise
+        E_init AND E_edges (line 21), no extra dilation of the candidates.
+        Thresholds the paper does not give keep our values."""
+        return cls(**{"tau_acm": TAU_ACM, "g_norm": "max", "od_method": "entropy_low",
+                      "edge_mode": "pixel", "cand_dilate": 0, **kw})
+
+    @classmethod
+    def from_flags(cls, paper_values: bool = False, strict_paper: bool = False, **kw) -> "Params":
+        """Parameters for the --paper-values / --strict-paper command-line options."""
+        if strict_paper:
+            return cls.paper_strict(**kw)
+        return cls.paper(**kw) if paper_values else cls(**kw)
 
 
 @dataclass
@@ -120,8 +136,8 @@ def detect_exudates(rgb_full: np.ndarray | None, params: Params | None = None,
     akey = ("anatomy", p.od_method)
     if akey not in pre.cache:
         vessels = anatomy.detect_vessels(green, roi, d)
-        if p.od_method == "entropy":
-            od, center = anatomy.detect_optic_disc_entropy(pre.rgb, roi, d)
+        if p.od_method in ("entropy", "entropy_low"):
+            od, center = anatomy.detect_optic_disc_entropy(pre.rgb, roi, d, low=p.od_method == "entropy_low")
         else:
             od, center = anatomy.detect_optic_disc_brightness(pre.rgb, roi, vessels, d)
         pre.cache[akey] = (vessels, od, center, anatomy.roi_border(roi, d))

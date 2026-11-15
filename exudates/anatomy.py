@@ -57,7 +57,7 @@ def _circularity(area, perimeter):
     return 4 * np.pi * area / max(perimeter, 1e-6) ** 2
 
 
-def detect_optic_disc_entropy(rgb: np.ndarray, roi: np.ndarray, d: int):
+def detect_optic_disc_entropy(rgb: np.ndarray, roi: np.ndarray, d: int, low: bool = False):
     """Paper's OD heuristic: median + CLAHE -> local entropy -> threshold ->
     pick the large component with the highest circularity.
 
@@ -66,6 +66,9 @@ def detect_optic_disc_entropy(rgb: np.ndarray, roi: np.ndarray, d: int):
     by dark vessels - is the highest-entropy spot, so the top entropy values are
     kept instead (75/81 correct). Window radius and percentile were chosen on
     the IDRiD OD masks (not in paper).
+
+    low=True keeps the low-entropy candidates instead, exactly as the paper
+    states (used by the strict-paper mode, for comparison).
 
     Works on a 4x downscaled copy (entropy over large windows is slow).
     Returns (mask, center).
@@ -81,8 +84,12 @@ def detect_optic_disc_entropy(rgb: np.ndarray, roi: np.ndarray, d: int):
     # local entropy: how varied the gray levels are around each pixel
     ent = entropy(gray, disk(ds * OD_ENTROPY_RADIUS_FRAC), mask=roi_s.astype(np.uint8)).astype(np.float32)
     inner = cv2.erode(roi_s.astype(np.uint8), disk(ds * 0.05)).astype(bool)
-    thr = np.percentile(ent[inner], OD_ENTROPY_PERCENTILE)
-    cand = ((ent > thr) & inner).astype(np.uint8)
+    if low:      # the paper as written: the 5 % lowest entropy values
+        thr = np.percentile(ent[inner], 100 - OD_ENTROPY_PERCENTILE)
+        cand = ((ent < thr) & inner).astype(np.uint8)
+    else:        # our version: the 5 % highest entropy values
+        thr = np.percentile(ent[inner], OD_ENTROPY_PERCENTILE)
+        cand = ((ent > thr) & inner).astype(np.uint8)
 
     od_area = np.pi * (OD_DIAMETER_FRAC * ds / 2) ** 2      # expected area of the optic disc
     contours, _ = cv2.findContours(cand, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
