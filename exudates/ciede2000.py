@@ -10,43 +10,45 @@ import numpy as np
 
 
 def delta_e00(lab1: np.ndarray, lab2: np.ndarray, kL=1.0, kC=1.0, kH=1.0) -> np.ndarray:
+    # split both colors into L*, a*, b*
     lab1 = np.asarray(lab1, np.float64)
     lab2 = np.asarray(lab2, np.float64)
     L1, a1, b1 = lab1[..., 0], lab1[..., 1], lab1[..., 2]
     L2, a2, b2 = lab2[..., 0], lab2[..., 1], lab2[..., 2]
 
-    # Eq. (1): chroma of each sample, then their mean
+    # Eq. (1): chroma (how colorful) of each color, then their mean
     C1 = np.hypot(a1, b1)
     C2 = np.hypot(a2, b2)
     C_bar = (C1 + C2) / 2
-    # Eq. (2): scaling factor g
+    # Eq. (2): factor g, corrects a* for grayish (low-chroma) colors
     C_bar7 = C_bar ** 7
     g = 0.5 * (1 - np.sqrt(C_bar7 / (C_bar7 + 25.0 ** 7)))
-    # Eqs. (3)-(7): modified a', C', h'
+    # Eqs. (3)-(7): corrected a', chroma C' and hue angle h' (degrees)
     a1p, a2p = (1 + g) * a1, (1 + g) * a2
     C1p, C2p = np.hypot(a1p, b1), np.hypot(a2p, b2)
     h1p = np.degrees(np.arctan2(b1, a1p)) % 360
     h2p = np.degrees(np.arctan2(b2, a2p)) % 360
 
-    # Eqs. (8)-(10): differences
+    # Eqs. (8)-(10): differences in lightness, chroma and hue
     dLp = L2 - L1
     dCp = C2p - C1p
     dhp = h2p - h1p
-    dhp = np.where(dhp > 180, dhp - 360, dhp)
+    dhp = np.where(dhp > 180, dhp - 360, dhp)        # keep hue difference in [-180, 180]
     dhp = np.where(dhp < -180, dhp + 360, dhp)
-    dhp = np.where(C1p * C2p == 0, 0.0, dhp)
+    dhp = np.where(C1p * C2p == 0, 0.0, dhp)         # gray colors have no hue
     dHp = 2 * np.sqrt(C1p * C2p) * np.sin(np.radians(dhp) / 2)
 
-    # means used by the weighting functions
+    # averages of the two colors, used by the weights below
     Lp_bar = (L1 + L2) / 2
     Cp_bar = (C1p + C2p) / 2
     hsum = h1p + h2p
+    # average hue, taking the 360 -> 0 wrap-around into account
     hp_bar = np.where(np.abs(h1p - h2p) > 180,
                       np.where(hsum < 360, (hsum + 360) / 2, (hsum - 360) / 2),
                       hsum / 2)
     hp_bar = np.where(C1p * C2p == 0, hsum, hp_bar)
 
-    # Eqs. (11)-(14): weighting functions
+    # Eqs. (11)-(14): weights - how sensitive the eye is to each kind of difference
     SL = 1 + 0.015 * (Lp_bar - 50) ** 2 / np.sqrt(20 + (Lp_bar - 50) ** 2)
     SC = 1 + 0.045 * Cp_bar
     T = (1 - 0.17 * np.cos(np.radians(hp_bar - 30))
@@ -55,12 +57,12 @@ def delta_e00(lab1: np.ndarray, lab2: np.ndarray, kL=1.0, kC=1.0, kH=1.0) -> np.
          - 0.20 * np.cos(np.radians(4 * hp_bar - 63)))
     SH = 1 + 0.015 * Cp_bar * T
 
-    # Eq. (15): rotation term
+    # Eq. (15): rotation term, a correction for blue colors
     Cp_bar7 = Cp_bar ** 7
     RT = (-2 * np.sqrt(Cp_bar7 / (Cp_bar7 + 25.0 ** 7))
           * np.sin(np.radians(60 * np.exp(-(((hp_bar - 275) / 25) ** 2)))))
 
-    # Eq. (16)
+    # Eq. (16): combine everything into one distance
     tL = dLp / (kL * SL)
     tC = dCp / (kC * SC)
     tH = dHp / (kH * SH)

@@ -51,13 +51,15 @@ def disk(radius: float) -> np.ndarray:
 
 def roi_mask(rgb: np.ndarray) -> np.ndarray:
     """Retina mask from the red channel (the corners of a fundus photo are ~black)."""
-    red = cv2.GaussianBlur(rgb[..., 0], (5, 5), 0)
-    thr = max(20, 0.08 * float(np.percentile(red, 99)))
+    red = cv2.GaussianBlur(rgb[..., 0], (5, 5), 0)              # smoothed red channel
+    thr = max(20, 0.08 * float(np.percentile(red, 99)))         # retina = brighter than this
     mask = (red > thr).astype(np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, disk(5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, disk(5))      # remove small noise
+    # keep only the largest blob (the retina)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     if n > 1:
         mask = (labels == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))).astype(np.uint8)
+    # fill any holes inside it
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filled = np.zeros_like(mask)
     cv2.drawContours(filled, contours, -1, 1, thickness=cv2.FILLED)
@@ -76,19 +78,21 @@ def lab_to_rgb(lab: np.ndarray) -> np.ndarray:
 
 def crop_and_resize(rgb_full: np.ndarray, work_width: int = WORK_WIDTH):
     roi_full = roi_mask(rgb_full)
+    # bounding box of the retina -> cut away the black corners
     ys, xs = np.where(roi_full)
     y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
     rgb, roi = rgb_full[y0:y1, x0:x1], roi_full[y0:y1, x0:x1]
+    # resize to the standard width (1500 px)
     scale = work_width / rgb.shape[1]
     size = (work_width, int(round(rgb.shape[0] * scale)))
-    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
+    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC   # best method for shrinking / enlarging
     rgb = cv2.resize(rgb, size, interpolation=interp)
-    roi = cv2.resize(roi.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST).astype(bool)
+    roi = cv2.resize(roi.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST).astype(bool)  # mask stays true/false
     return rgb, roi, (y0, y1, x0, x1), scale
 
 
 def lab_stats(lab: np.ndarray, roi: np.ndarray) -> dict:
-    v = lab[roi]
+    v = lab[roi]                                                 # retina pixels only
     return {"mean": v.mean(axis=0).tolist(), "std": v.std(axis=0).tolist()}
 
 
@@ -103,17 +107,17 @@ def load_reference(path: Path = REFERENCE_FILE) -> dict:
 def histogram_matching(lab: np.ndarray, roi: np.ndarray, ref: dict) -> np.ndarray:
     """Match mean and std of every L*a*b* channel to the reference, on the ROI."""
     out = lab.copy()
-    mu, sd = lab[roi].mean(axis=0), lab[roi].std(axis=0) + 1e-6
-    ref_mu, ref_sd = np.array(ref["mean"]), np.array(ref["std"])
-    out[roi] = (lab[roi] - mu) / sd * ref_sd + ref_mu
-    out[~roi] = 0
-    out[..., 0] = np.clip(out[..., 0], 0, 100)
+    mu, sd = lab[roi].mean(axis=0), lab[roi].std(axis=0) + 1e-6   # this image's mean / std
+    ref_mu, ref_sd = np.array(ref["mean"]), np.array(ref["std"])  # reference image's mean / std
+    out[roi] = (lab[roi] - mu) / sd * ref_sd + ref_mu             # shift and scale to the reference
+    out[~roi] = 0                                                 # background stays black
+    out[..., 0] = np.clip(out[..., 0], 0, 100)                    # lightness must stay in 0..100
     return out.astype(np.float32)
 
 
 def preprocess(rgb_full: np.ndarray, work_width: int = WORK_WIDTH, ref: dict | None = None) -> Preprocessed:
-    rgb, roi, box, scale = crop_and_resize(rgb_full, work_width)
-    lab = histogram_matching(rgb_to_lab(rgb), roi, ref or load_reference())
-    rgb_norm = lab_to_rgb(lab)
+    rgb, roi, box, scale = crop_and_resize(rgb_full, work_width)              # find retina, resize
+    lab = histogram_matching(rgb_to_lab(rgb), roi, ref or load_reference())   # Lab + color matching
+    rgb_norm = lab_to_rgb(lab)                                                # back to RGB, for display
     rgb_norm[~roi] = 0
     return Preprocessed(rgb, lab, rgb_norm, roi, box, scale, work_width)
